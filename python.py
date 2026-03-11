@@ -21,14 +21,20 @@ def df_datetime(data):
 def plot_df(datas, names):
     fig, ax = plt.subplots(len(datas), 3, figsize=(10, 4*len(datas)), sharex=True)
     j=0
-    for d in ["dE","dN","dU"]:
+    for d in [("dE","Se"),("dN","Sn"),("dU","Su")]:
         for i in range(len(datas)):
             ax[i,j].plot(
                 datas[i]["datetime"],
-                datas[i][d],
-                marker="+",
-                linestyle="-"
+                datas[i][d[0]],
+                linestyle="-",
+                linewidth=1
             )
+            
+            ax[i,j].fill_between(datas[i]["datetime"],
+                                 datas[i][d[0]]+2*datas[i][d[1]],
+                                 datas[i][d[0]]-2*datas[i][d[1]],
+                                 facecolor='red', alpha=0.5)
+            
             ax[i,j].set_ylabel(f"{names[i]} {d} (m)")
             ax[i,j].set_xlabel("t (Decimal Year)")
             ax[i,j].grid(True)
@@ -94,7 +100,7 @@ if __name__ == "__main__":
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.coastlines()
     ax.scatter(data[:,2],data[:,1],color = 'green')
-    ax.scatter(gnss["long."].values,gnss["lat."].values,marker = "^", color = "pink")
+    ax.scatter(gnss["long."].values,gnss["lat."].values,marker = "^", color = "red")
     for index,row in gnss.iterrows():
         ax.text(row["long."],row["lat."],row["site"])
     ax.text(data[4,2],data[4,1],"SEISME")
