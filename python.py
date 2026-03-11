@@ -11,14 +11,21 @@ def df_datetime(data):
     data["date_str"] = data["*YYYYMMDD"].astype(str)
     data["heure_str"] = data["HHMMSS"].astype(str).str.zfill(6)
     
-    # Combiner puis convertir
     data["datetime"] = pd.to_datetime(
         data["date_str"] + data["heure_str"],
         format="%Y%m%d%H%M%S"
     )
+    
+    # Calcul année décimale
+    year = data["datetime"].dt.year
+    start_year = pd.to_datetime(year.astype(str) + "-01-01")
+    next_year = pd.to_datetime((year + 1).astype(str) + "-01-01")
+    
+    data["datetime"] = year + (data["datetime"] - start_year) / (next_year - start_year)  
     return data
 
-def plot_df(datas, names):
+
+def plot_df(datas, names, changement):
     fig, ax = plt.subplots(len(datas), 3, figsize=(10, 4*len(datas)), sharex=True)
     j=0
     for d in [("dE","Se"),("dN","Sn"),("dU","Su")]:
@@ -35,7 +42,16 @@ def plot_df(datas, names):
                                  datas[i][d[0]]-2*datas[i][d[1]],
                                  facecolor='red', alpha=0.5)
             
-            ax[i,j].set_ylabel(f"{names[i]} {d} (m)")
+            
+            for dates in changement[j]:
+                if dates[1] != 9999:
+                    ax[i,j].axvline(x=dates[1],c="red",linestyle="--")
+                    
+            ax[i,j].axvline(x=2010+58/365.25,c="green",linestyle="--")
+            ax[i,j].axvline(x=2015+259/365.25,c="green",linestyle="--")
+            ax[i,j].axvline(x=2014+91/365.25,c="green",linestyle="--")
+            
+            ax[i,j].set_ylabel(f"{names[j]} {d[0]} (m)")
             ax[i,j].set_xlabel("t (Decimal Year)")
             ax[i,j].grid(True)
         j+=1
@@ -57,7 +73,6 @@ def changement_antenne(name, file):
                 jour_fin = "0"
             else:
                 jour_fin = split[3].split()[1]
-            print(annee_debut,annee_fin)
             liste_chgmt.append([(int(annee_debut) + int(jour_debut)/365),(int(annee_fin) + int(jour_fin)/365)])
     return liste_chgmt
 
@@ -87,7 +102,8 @@ if __name__ == "__main__":
     chgmt_CNBA = changement_antenne("CNBA", "materiel.dat")
     chgmt_DINO = changement_antenne("DINO", "materiel.dat")
     
-    plot_df([CNBA,DINO,UCOR], names)
+    changement = [chgmt_UCOR,chgmt_CNBA,chgmt_DINO]
+    plot_df([CNBA,DINO,UCOR], names, changement)
     
     fig,ax = plt.subplots(2,1)
     ax[0].hist(mag,bins = 50)
@@ -103,7 +119,7 @@ if __name__ == "__main__":
     ax.scatter(gnss["long."].values,gnss["lat."].values,marker = "^", color = "red")
     for index,row in gnss.iterrows():
         ax.text(row["long."],row["lat."],row["site"])
-    ax.text(data[4,2],data[4,1],"SEISME")
+    """"ax.text(data[4,2],data[4,1],"SEISME")"""
     fig.show()
     
     #axvline chgmt antenne
