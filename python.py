@@ -76,9 +76,36 @@ def changement_antenne(name, file):
             liste_chgmt.append([(int(annee_debut) + int(jour_debut)/365),(int(annee_fin) + int(jour_fin)/365)])
     return liste_chgmt
 
+def H(t,t0):
+    ''' 
+    Fonction de Heaviside
+    '''
+    
+    y = np.zeros_like(t)
+    y[t>t0] = 1
+    
+    return y
+
+def MC(A,B,P,X):
+    
+    dX = 1e6
+    i = 0
+    while dX.any() > 1e6 or i>=50:
+        
+        N = A.T@P@A
+        K = A.T@P@B
+        
+        dX = np.linalg.inv(N)@K
+        X += dX
+        i += 1
+    
+    V = B - A@X
+    sigma_0 = np.sqrt(V.T@P@V/(A.shape[0]-B.shape[0]))
+    
+    return X,V,sigma_0
 
 if __name__ == "__main__":
-
+#%%
     data = np.genfromtxt("query.csv",usecols=[0,1,2,3,4],encoding = "utf-8",
                          delimiter = ",",skip_header = 1)
     gnss = pd.read_csv("cGPS.dat",delimiter = "\s+")
@@ -122,4 +149,7 @@ if __name__ == "__main__":
     """"ax.text(data[4,2],data[4,1],"SEISME")"""
     fig.show()
     
-    #axvline chgmt antenne
+#%% Moindres carrés
+    
+    # B = 
+    
