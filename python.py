@@ -82,6 +82,10 @@ def H(x):
         return 0
     else:
         return 1
+    
+def H_(t,t0):
+    t = np.where(t<t0,0,1)
+    return t
 
 def MC_lineaire(A,B,P):
     N = A.T@P@A
@@ -141,12 +145,38 @@ def MC_saisonnier(station, coord,plot=False):
     return X_
 
 
-def MC_sauts(station, coord):
-    pass
-
-
+def MC_sauts(station, coord,dates,plot = False):
+    
+    #Pour récupérer les écart-types dans la bonne colonne
+    table_ecart_type = {"dN":"Sn", "dE":"Se", "dU":"Su"}
+    ecart_type = table_ecart_type[coord]
+    
+    #Définition des tailles de matrice
+    A = np.zeros((station.shape[0], 6 + len(dates)))
+    P = np.identity(station.shape[0])
+    B = np.zeros((station.shape[0], 1))
+    
+    #Remplissage des matrices
+    for i in range(0,station.shape[0]):
+        ligne = station.iloc[i]
+        t = ligne["datetime"]
+        A[i,:] = np.hstack(([t,1,np.cos(2*np.pi*t),np.sin(2*np.pi*t),np.cos(4*np.pi*t), np.sin(4*np.pi*t)]
+                            , np.array([H(t-date)for date in dates])))
+        P[i,i] = 1/ligne[ecart_type]**2
+        B[i,:] = ligne[coord]
+    X_ = MC_lineaire(A,B,P)
+   
+    if plot:
+        a,b,c,d,e,f = X_[0,0],X_[1,0],X_[2,0],X_[3,0],X_[4,0],X_[5,0]
+        t = station["datetime"]
+        fig, ax = plt.subplots()
+        ax.plot(t, station[coord])
+        ax.plot(t,a*t+b+c*np.cos(2*np.pi*t)+d*np.sin(2*np.pi*t)+e*np.cos(4*np.pi*t)+f*np.sin(4*np.pi*t)+np.sum(X_[6+i,0]*H_(t,date)for i,date in enumerate(dates)))
+        plt.show()
+       
+    return X_
+ 
 if __name__ == "__main__":
-#%%
     data = np.genfromtxt("query.csv",usecols=[0,1,2,3,4],encoding = "utf-8",
                          delimiter = ",",skip_header = 1)
     gnss = pd.read_csv("cGPS.dat",delimiter = "\s+")
@@ -190,5 +220,6 @@ if __name__ == "__main__":
     """"ax.text(data[4,2],data[4,1],"SEISME")"""
     fig.show()
     
-    print(MC_saisonnier(CNBA, "dN",True))
+    # print(MC_saisonnier(CNBA, "dN",True))
+    print(MC_sauts(CNBA,"dN",[2010+58/365.25,2015+259/365.25,2014+91/365.25],True))
     
