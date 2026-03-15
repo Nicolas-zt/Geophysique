@@ -125,7 +125,7 @@ def MC_saisonnier(station, coord,plot=False):
         ligne = station.iloc[i]
         t = ligne["datetime"]
         A[i,:] = [t,1,np.cos(2*np.pi*t),np.sin(2*np.pi*t),np.cos(4*np.pi*t), np.sin(4*np.pi*t)]
-        P[i,i] = ligne[ecart_type]
+        P[i,i] = 1/ligne[ecart_type]**2
         B[i,:] = ligne[coord]
         
     X_ = MC_lineaire(A,B,P)
@@ -135,7 +135,6 @@ def MC_saisonnier(station, coord,plot=False):
         t = station["datetime"]
         fig, ax = plt.subplots()
         ax.plot(t, station[coord])
-        
         ax.plot(t,a*t+b+c*np.cos(2*np.pi*t)+d*np.sin(2*np.pi*t)+e*np.cos(4*np.pi*t)+f*np.sin(4*np.pi*t))
         plt.show()
         
