@@ -51,7 +51,7 @@ def plot_df(datas, names, changement):
             ax[i,j].axvline(x=2015+259/365.25,c="green",linestyle="--")
             ax[i,j].axvline(x=2014+91/365.25,c="green",linestyle="--")
             
-            ax[i,j].set_ylabel(f"{names[j]} {d[0]} (m)")
+            ax[i,j].set_ylabel(f"{names[i]} {d[0]} (m)")
             ax[i,j].set_xlabel("t (Decimal Year)")
             ax[i,j].grid(True)
         j+=1
@@ -76,16 +76,19 @@ def changement_antenne(name, file):
             liste_chgmt.append([(int(annee_debut) + int(jour_debut)/365),(int(annee_fin) + int(jour_fin)/365)])
     return liste_chgmt
 
-def H(t,t0):
-    ''' 
-    Fonction de Heaviside
-    '''
-    
-    y = np.zeros_like(t)
-    y[t>t0] = 1
-    
-    return y
 
+def H(x):
+    if x<0:
+        return 0
+    else:
+        return 1
+
+def MC_lineaire(A,B,P):
+    N = A.T@P@A
+    K = A.T@P@B
+    X_ = np.linalg.inv(N)@K
+    return X_
+    
 def MC(A,B,P,X):
     
     dX = 1e6
@@ -103,6 +106,45 @@ def MC(A,B,P,X):
     sigma_0 = np.sqrt(V.T@P@V/(A.shape[0]-B.shape[0]))
     
     return X,V,sigma_0
+
+def MC_saisonnier(station, coord,plot=False):
+    """Station est le df de la station
+    coord est soit "dN", "dE" ou "dU", càd la série temporelle à laquelle on s'interesse"""
+
+    #Pour récupérer les écart-types dans la bonne colonne
+    table_ecart_type = {"dN":"Sn", "dE":"Se", "dU":"Su"}
+    ecart_type = table_ecart_type[coord]
+    
+    #Définition des tailles de matrice
+    A = np.zeros((station.shape[0], 6))
+    P = np.identity(station.shape[0])
+    B = np.zeros((station.shape[0], 1))
+    
+    #Remplissage des matrices
+    for i in range(0,station.shape[0]):
+        ligne = station.iloc[i]
+        t = ligne["datetime"]
+        A[i,:] = [t,1,np.cos(2*np.pi*t),np.sin(2*np.pi*t),np.cos(4*np.pi*t), np.sin(4*np.pi*t)]
+        P[i,i] = ligne[ecart_type]
+        B[i,:] = ligne[coord]
+        
+    X_ = MC_lineaire(A,B,P)
+    
+    if plot:
+        a,b,c,d,e,f = X_[0,0],X_[1,0],X_[2,0],X_[3,0],X_[4,0],X_[5,0]
+        t = station["datetime"]
+        fig, ax = plt.subplots()
+        ax.plot(t, station[coord])
+        
+        ax.plot(t,a*t+b+c*np.cos(2*np.pi*t)+d*np.sin(2*np.pi*t)+e*np.cos(4*np.pi*t)+f*np.sin(4*np.pi*t))
+        plt.show()
+        
+    return X_
+
+
+def MC_sauts(station, coord):
+    pass
+
 
 if __name__ == "__main__":
 #%%
@@ -149,7 +191,5 @@ if __name__ == "__main__":
     """"ax.text(data[4,2],data[4,1],"SEISME")"""
     fig.show()
     
-#%% Moindres carrés
-    
-    # B = 
+    print(MC_saisonnier(CNBA, "dN",True))
     
