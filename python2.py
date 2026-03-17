@@ -78,10 +78,10 @@ def changement_antenne(name, file):
 
 
 def H(x):
-    if x<0:
-        return 0
+    if isinstance(x, (pd.Series, pd.DataFrame)):
+        return (x >= 0).astype(int)
     else:
-        return 1
+        return 0 if x < 0 else 1
 
 def MC_lineaire(A,B,P):
     N = A.T@P@A
@@ -107,13 +107,18 @@ def MC(A,B,P,X):
     
     return X,V,sigma_0
 
-def MC_saisonnier(station, coord,plot=False):
+def MC_saisonnier(Station, coord, date_debut, date_fin, plot=False):
     """Station est le df de la station
+    date_debut, date_fin sont les dates sur laquelle on estime la composante saisonnière et la tendance linéaire
     coord est soit "dN", "dE" ou "dU", càd la série temporelle à laquelle on s'interesse"""
 
     #Pour récupérer les écart-types dans la bonne colonne
     table_ecart_type = {"dN":"Sn", "dE":"Se", "dU":"Su"}
     ecart_type = table_ecart_type[coord]
+    
+    station = Station.copy()
+    station = station[station["datetime"] > date_debut]
+    station = station[station["datetime"] < date_fin]
     
     #Définition des tailles de matrice
     A = np.zeros((station.shape[0], 6))
@@ -130,17 +135,21 @@ def MC_saisonnier(station, coord,plot=False):
         
     X_ = MC_lineaire(A,B,P)
     
+    
+    a,b,c,d,e,f = X_[0,0],X_[1,0],X_[2,0],X_[3,0],X_[4,0],X_[5,0]
+    t = Station["datetime"]
+    f = a*t+b+c*np.cos(2*np.pi*t)+d*np.sin(2*np.pi*t)+e*np.cos(4*np.pi*t)+f*np.sin(4*np.pi*t)
+    Station[coord+"_signal_saisonnier"] = Station[coord] - f
+    
     if plot:
-        a,b,c,d,e,f = X_[0,0],X_[1,0],X_[2,0],X_[3,0],X_[4,0],X_[5,0]
-        t = station["datetime"]
         fig, ax = plt.subplots()
-        ax.plot(t, station[coord])
-        ax.plot(t,a*t+b+c*np.cos(2*np.pi*t)+d*np.sin(2*np.pi*t)+e*np.cos(4*np.pi*t)+f*np.sin(4*np.pi*t))
+        ax.plot(t, Station[coord])
+        ax.plot(t,f)
+        ax.plot(t,Station[coord+"_signal_saisonnier"])
         plt.show()
         
-    return X_
-
-def MC_postsismic(station, coord, date_chgmt_antenne, date_seisme, sol_init, plot=False):
+    return round(X_[0,0],3),round(X_[2,0],3),round(X_[3,0],3),round(X_[4,0],3),round(X_[5,0],3)
+def MC_cosismic(station, coord, date_chgmt_antenne, date_seisme, plot=False):
     """ Station est le df de la station
     coord est soit "dN", "dE" ou "dU", càd la série temporelle à laquelle on s'interesse
     date_chgmt_antenne : Liste de date
@@ -153,79 +162,129 @@ def MC_postsismic(station, coord, date_chgmt_antenne, date_seisme, sol_init, plo
     #Création de variables
     n=len(date_chgmt_antenne)
     m=len(date_seisme)
-    sol = sol_init.copy().reshape(len(sol_init),1)
     
     
     #Définition des tailles de matrice
-    A = np.zeros((station.shape[0], 6+n+3*m))
+    A = np.zeros((station.shape[0], n+m))
     P = np.identity(station.shape[0])
     B = np.zeros((station.shape[0], 1))
     
-    #Évaluation de la fonction f
-    def f(time,solution):
-        a,b,c,d,e,f = solution[0,0],solution[1,0],solution[2,0],solution[3,0],solution[4,0],solution[5,0]
-        s = a*time+b+c*np.cos(2*np.pi*time)+d*np.sin(2*np.pi*time)+e*np.cos(4*np.pi*time)+f*np.sin(4*np.pi*time)
-        #Saut antenne
-        for j in range(n):
-            ck = solution[5+1+j,0]
-            s+= ck * H(time-date_chgmt_antenne[j])
-            
-        #Saut séisme
-        for j in range(m):
-            ck = solution[5+n+1+j,0]
-            dt = time-date_seisme[j]
-            s+= ck * H(dt)
+    #Remplissage des matrices
+    for i in range(0,station.shape[0]):
+        ligne = station.iloc[i]
+        t = ligne["datetime"]
+        A[i,:] = [H(t-date_chgmt_antenne[j]) for j in range(n)] + [H(t-date_seisme[j]) for j in range(m)]
+        P[i,i] = 1/ligne[ecart_type]**2
+        B[i,:] = ligne[coord+"_signal_saisonnier"]
+        
+    X_ = MC_lineaire(A,B,P)
+    
+    t = station["datetime"]
+    new_signal = station[coord+"_signal_saisonnier"]
+    saut = 0
+    
+    for j in range(n):
+        new_signal -= X_[saut,0]*H(t-date_chgmt_antenne[j])
+        saut+=1
+    for j in range(m):
+        new_signal -= X_[saut,0]*H(t-date_seisme[j])
+        saut+=1
+        
+    station[coord + "_cosismic"] = new_signal
+    
+    if plot:
+        fig, ax = plt.subplots()
+        ax.plot(t, station[coord])
+        ax.plot(t, station[coord + "_cosismic"])
+        plt.show()
+    
+    return X_
 
-        #Post_Sismique
+
+#Estimation de post-sismique et co-sismique en même temps
+def MC_postsismic(station, coord, date_chgmt_antenne, date_seisme, sol_init, plot=False):
+    table_ecart_type = {"dN":"Sn", "dE":"Se", "dU":"Su"}
+    ecart_type = table_ecart_type[coord]
+    
+    n = len(date_chgmt_antenne)
+    m = len(date_seisme)
+    
+    sol = sol_init.copy().reshape(len(sol_init), 1)
+    
+    A = np.zeros((station.shape[0], n + 3*m))
+    P = np.identity(station.shape[0])
+    B = np.zeros((station.shape[0], 1))
+    
+    def f(time, solution):
+        s = 0
+        
+        # Sauts antenne
+        for j in range(n):
+            ck = solution[j, 0]
+            s += ck * H(time - date_chgmt_antenne[j])
+            
+        # Sauts séisme
         for j in range(m):
-            Ak = solution[5+n+m+1+j,0]   # amplitude du post-sismique
-            ak = solution[5+n+2*m+1+j,0] # taux de décroissance
+            ck = solution[n + j, 0]
             dt = time - date_seisme[j]
-            s += Ak * np.exp(-ak*dt) * H(dt)
+            s += ck * H(dt)
+        
+        # Post-sismique
+        for j in range(m):
+            Ak = solution[n + m + j, 0]
+            ak = solution[n + 2*m + j, 0]
+            dt = time - date_seisme[j]
+            s += Ak * np.exp(-ak * dt) * H(dt)
             
         return s
     
     for k in range(20):
-        #Remplissage des matrices
         for i in range(station.shape[0]):
-            a0 = sol[-m:]
             ligne = station.iloc[i]
             t = ligne["datetime"]
-            A[i,:] = ([t,1,np.cos(2*np.pi*t),np.sin(2*np.pi*t),np.cos(4*np.pi*t), np.sin(4*np.pi*t)]
-                      + [H(t-date_chgmt_antenne[j]) for j in range(n)]
-                      + [H(t-date_seisme[j]) for j in range(m)]
-                      + [np.exp(-a0[j,0]*(t-date_seisme[j]))*H(t-date_seisme[j]) for j in range(m)]
-                      + [-(t-date_seisme[j])*np.exp(-a0[j,0]*(t-date_seisme[j]))*(H(t-date_seisme[j])) for j in range(m)])
-                      
             
-            P[i,i] = 1/ligne[ecart_type]**2
-            B[i,:] = ligne[coord] - f(t,sol)
+            # paramètres ak (taux)
+            a0 = sol[n + 2*m : n + 3*m]
+            
+            A[i, :] = (
+                [H(t - date_chgmt_antenne[j]) for j in range(n)]
+                + [H(t - date_seisme[j]) for j in range(m)]
+                + [np.exp(-a0[j, 0] * (t - date_seisme[j])) * H(t - date_seisme[j]) for j in range(m)]
+                + [-(t - date_seisme[j]) * np.exp(-a0[j, 0] * (t - date_seisme[j])) * H(t - date_seisme[j]) for j in range(m)]
+            )
+            
+            P[i, i] = 1 / ligne[ecart_type]**2
+            B[i, :] = ligne[coord+"_signal_saisonnier"] - f(t, sol)
 
-        dX_ = MC_lineaire(A,B,P)
+        dX_ = MC_lineaire(A, B, P)
         sol += dX_
-        
-        
+    
     if plot:
         fig, ax = plt.subplots()
-        
-        l =[]
-        print(sol)
+        l = []
         
         for k in range(station.shape[0]):
             ligne = station.iloc[k]
             t = ligne["datetime"]
-            l.append(f(t,sol))
+            l.append(f(t, sol))
         
         t = station["datetime"]
-        
-        ax.plot(t, station[coord])
-        ax.plot(t,l)
-        
-        
+        ax.plot(t, station[coord+"_signal_saisonnier"])
+        ax.plot(t, l)
         plt.show()
     
     return sol
+
+
+#Estimation du séisme sur une période de X années après le séisme
+def Estimation_POST(station,coord,periode_evaluation,A,a):
+    Amplitude_t0 = A*np.exp(0)
+    Amplitude_t = A*np.exp(-a*periode_evaluation)
+    return Amplitude_t - Amplitude_t0
     
+    
+    
+
 
 
 if __name__ == "__main__":
@@ -270,13 +329,94 @@ if __name__ == "__main__":
     ax.scatter(gnss["long."].values,gnss["lat."].values,marker = "^", color = "red")
     for index,row in gnss.iterrows():
         ax.text(row["long."],row["lat."],row["site"])
-    """"ax.text(data[4,2],data[4,1],"SEISME")"""
+        
+    extent = ax.get_extent()
     fig.show()
     
-    #print(MC_saisonnier(CNBA, "dN",True))
+    #Estimation long terme CNBA
+    A,C,D,E,F = MC_saisonnier(CNBA, "dE",2006, 2015.66)
+    E_Long_terme = A
+    print(f"CNBA_Est \n Vitesse long terme : {A} m/an \n Amplitude annuelle : E : {C} m ; N : {D} m \n Amplitude semi-annuelle : E : {E} m ; N : {F} m")
+    A,C,D,E,F = MC_saisonnier(CNBA, "dN",2016, 2022)
+    N_Long_terme = A
+    print(f"CNBA_Nord \n Vitesse long terme : {A} m/an \n Amplitude annuelle : E : {C} m ; N : {D} m \n Amplitude semi-annuelle : E : {E} m ; N : {F} m")
+    CNBA_Long_terme = float(E_Long_terme), float(N_Long_terme)
+    print(CNBA_Long_terme)
     
-    Estimation_CNBA = MC_postsismic(CNBA, "dE",[2021.4493],[2010+58/365.25,2015+259/365.25,2014+91/365.25],np.array([0.0 for j in range(6+1+3)]+[0.1,0.1,0.1]+[1,1,1]), True)
-    #Estimation_DINO = MC_postsismic(DINO, "dE",[2016.9644],[2015+259/365.25,2014+91/365.25],np.array([0.0 for j in range(6+1+2)]+[0.1,0.1]+[1,1]), True)
-    #Estimation_UCOR = MC_postsismic(UCOR, "dE",[2008.8767,2017.6438,2019.4137],[2010+58/365.25,2015+259/365.25,2014+91/365.25],np.array([0.0 for j in range(6+3+3)]+[0.1,0.1,0.1]+[1,1,1]), True)
+    #Estimation long terme DINO
+    A,C,D,E,F = MC_saisonnier(DINO, "dE",2012.00, 2015.66)
+    E_Long_terme = A
+    print(f"DINO_Est \n Vitesse long terme : {A} m/an \n Amplitude annuelle : E : {C} m ; N : {D} m \n Amplitude semi-annuelle : E : {E} m ; N : {F} m")
+    A,C,D,E,F = MC_saisonnier(DINO, "dN",2017.08, 2021.9)
+    N_Long_terme = A
+    print(f"DINO_Nord \n Vitesse long terme : {A} m/an \n Amplitude annuelle : E : {C} m ; N : {D} m \n Amplitude semi-annuelle : E : {E} m ; N : {F} m")
+    DINO_Long_terme = float(E_Long_terme), float(N_Long_terme)
     
-    v_CNBA, CO_CNBA, POST_CNBA = Estimation_CNBA[0], Estimation_CNBA[5+3], Estimation_CNBA[-1]
+    #Estimation long terme UCOR
+    A,C,D,E,F = MC_saisonnier(UCOR, "dE",2010.20, 2015.66)
+    E_Long_terme = A
+    print(f"UCOR_Est \n Vitesse long terme : {A} m/an \n Amplitude annuelle : E : {C} m ; N : {D} m \n Amplitude semi-annuelle : E : {E} m ; N : {F} m")
+    A,C,D,E,F = MC_saisonnier(UCOR, "dN",2010.4, 2017.46)
+    N_Long_terme = A
+    print(f"UCOR_Nord \n Vitesse long terme : {A} m/an \n Amplitude annuelle : E : {C} m ; N : {D} m \n Amplitude semi-annuelle : E : {E} m ; N : {F} m")
+    UCOR_Long_terme = float(E_Long_terme), float(N_Long_terme)
+    
+    #Element pour carto
+    lat_CNBA = gnss.loc[gnss["site"] == "CNBA", "lat."].iloc[0]
+    lon_CNBA = gnss.loc[gnss["site"] == "CNBA", "long."].iloc[0]
+    lat_DINO = gnss.loc[gnss["site"] == "DINO", "lat."].iloc[0]
+    lon_DINO = gnss.loc[gnss["site"] == "DINO", "long."].iloc[0]
+    lat_UCOR = gnss.loc[gnss["site"] == "UCOR", "lat."].iloc[0]
+    lon_UCOR = gnss.loc[gnss["site"] == "UCOR", "long."].iloc[0]
+    
+    #Carte vitesse long-terme
+    fig = plt.figure()
+    ax = plt.axes(projection=ccrs.PlateCarree())
+    ax.set_extent(extent, crs=ccrs.PlateCarree())
+    ax.coastlines()
+    ax.plot()
+    ax.scatter([lon_CNBA,lon_DINO,lon_UCOR],[lat_CNBA,lat_DINO,lat_UCOR],color = 'green', transform=ccrs.PlateCarree())
+    ax.quiver([lon_CNBA,lon_DINO,lon_UCOR],[lat_CNBA,lat_DINO,lat_UCOR],
+              [CNBA_Long_terme[0]*100,DINO_Long_terme[0]*100,UCOR_Long_terme[0]*100],
+              [CNBA_Long_terme[1]*100,DINO_Long_terme[1]*100,UCOR_Long_terme[1]*100],
+              transform=ccrs.PlateCarree())
+    
+
+    CosismicE_CNBA = MC_cosismic(CNBA, "dE",[2021.4493],[2010+58/365.25,2015+259/365.25,2014+91/365.25])
+    print(f"Amplitude Cosismique Est Iquique sur CNBA : {round(CosismicE_CNBA[2,0],3)} m")
+    CO_E_CNBA = round(CosismicE_CNBA[2,0],3)
+    
+    CosismicN_CNBA = MC_cosismic(CNBA, "dN",[2021.4493],[2010+58/365.25,2015+259/365.25,2014+91/365.25])
+    print(f"Amplitude Cosismique Nord Iquique sur CNBA : {round(CosismicN_CNBA[2,0],3)} m")
+    CO_N_CNBA = round(CosismicN_CNBA[2,0],3)
+    
+    CosismicE_DINO = MC_cosismic(CNBA, "dE",[2016.9644],[2015+259/365.25,2014+91/365.25])
+    print(f"Amplitude Cosismique Est Iquique sur DINO : {round(CosismicE_DINO[1,0],3)} m")
+    CO_E_DINO = round(CosismicE_DINO[1,0],3)
+    
+    CosismicN_DINO = MC_cosismic(CNBA, "dN",[2016.9644],[2015+259/365.25,2014+91/365.25])
+    print(f"Amplitude Cosismique Nord Iquique sur DINO : {round(CosismicN_DINO[1,0],3)} m")
+    CO_N_DINO = round(CosismicN_DINO[1,0],3)
+    
+    CosismicE_UCOR = MC_cosismic(CNBA, "dE",[2008.8767,2017.6438,2019.4137],[2010+58/365.25,2015+259/365.25,2014+91/365.25])
+    print(f"Amplitude Cosismique Est Iquique sur UCOR : {round(CosismicE_UCOR[4,0],3)} m")
+    CO_E_UCOR = round(CosismicE_UCOR[4,0],3)
+    
+    CosismicN_UCOR = MC_cosismic(CNBA, "dN",[2008.8767,2017.6438,2019.4137],[2010+58/365.25,2015+259/365.25,2014+91/365.25])
+    print(f"Amplitude Cosismique Nord Iquique sur UCOR : {round(CosismicN_UCOR[4,0],3)} m")
+    CO_N_UCOR = round(CosismicN_UCOR[4,0],3)
+    
+    #Carte cosismique
+    fig = plt.figure()
+    ax = plt.axes(projection=ccrs.PlateCarree())
+    ax.set_extent(extent, crs=ccrs.PlateCarree())
+    ax.coastlines()
+    ax.plot()
+    ax.scatter([lon_CNBA,lon_DINO,lon_UCOR],[lat_CNBA,lat_DINO,lat_UCOR],color = 'green', transform=ccrs.PlateCarree())
+    ax.quiver([lon_CNBA,lon_DINO,lon_UCOR],[lat_CNBA,lat_DINO,lat_UCOR],
+              [CO_E_CNBA*100,CO_E_DINO*100,CO_E_UCOR*100],
+              [CO_N_CNBA*100,CO_N_DINO*100,CO_N_UCOR*100],
+              transform=ccrs.PlateCarree())
+    
+    Estimation_CNBA = MC_postsismic(CNBA, "dE",[2021.4493],[2010+58/365.25,2015+259/365.25,2014+91/365.25],np.array([0]+[0,0,0]+[0.1,0.1,0.1]+[1,1,1]))
+    
